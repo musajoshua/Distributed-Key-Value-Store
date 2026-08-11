@@ -4,6 +4,13 @@ export interface Entry {
     deleted: boolean;
 }
 
+export interface LogEntry {
+    key: string;
+    value: string | null;
+    lsn: number;
+    deleted: boolean;
+}
+
 export class Store {
     private state: Map<string, Entry> = new Map();
     private lsnCounter = 0;
@@ -45,5 +52,32 @@ export class Store {
         }
         return {existed: false};
 
+    }
+
+    apply(entry: LogEntry): boolean{
+        const currentEntry = this.state.get(entry.key)
+
+        if(!currentEntry || entry.lsn > currentEntry.lsn){
+            const { key, value, lsn, deleted } = entry
+            this.state.set(key, {
+                value,
+                deleted,
+                lsn
+            });
+
+            this.lsnCounter = Math.max(this.lsnCounter, lsn);
+
+            return true;
+        }
+
+        return false;
+    }
+
+    nextLsn(): number {
+        return ++this.lsnCounter
+    }
+
+    get highestLsn(): number {
+        return this.lsnCounter;
     }
 }
