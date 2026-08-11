@@ -23,7 +23,18 @@ export function createServer(store: Store, config: Config, cluster: Cluster): Fa
         return reply.code(400).send({ error: 'body must be { "value": <string> }' });
       }
 
-      const lsn = store.put(key, value);
+      if(!cluster.isLeader){
+        return reply.code(503).send({ error: 'not the leader' });
+      }
+
+      const lsn = store.nextLsn();
+      const entry = { key, value, lsn, deleted: false };
+
+      const ok = await cluster.replicate(entry)
+
+      if(!ok) return reply.code(504).send({ error: 'could not reach a majority' });
+      
+      store.apply(entry)
       return reply.code(200).send({ ok: true, lsn });
     },
   );
@@ -37,10 +48,25 @@ export function createServer(store: Store, config: Config, cluster: Cluster): Fa
   });
 
   app.delete<{ Params: IParams }>('/store/:key', async (req, reply) => {
-    const { existed } = store.delete(req.params.key);
-    if (!existed) {
+    if(!cluster.isLeader){
+      return reply.code(503).send({ error: 'not the leader' });
+    }
+
+    const storedEntry = store.get(req.params.key);
+    if (storedEntry === null) {
       return reply.code(404).send({ error: 'not found' });
     }
+
+    const lsn = store.nextLsn();
+
+    const entry = { key: req.params.key, value: '', lsn, deleted: true };
+
+    const ok = await cluster.replicate(entry);
+
+    if(!ok) return reply.code(504).send({ error: 'could not reach a majority' });
+
+    store.apply(entry)
+
     return reply.code(200).send({ ok: true });
   });
 
