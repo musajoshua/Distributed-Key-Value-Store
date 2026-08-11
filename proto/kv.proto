@@ -4,6 +4,7 @@ package kv;
 
 service Cluster {
   rpc Heartbeat (HeartbeatRequest) returns (HeartbeatReply);
+  rpc Replicate (LogEntry) returns (ReplicateReply);
 }
 
 message HeartbeatRequest {
@@ -13,4 +14,15 @@ message HeartbeatRequest {
 message HeartbeatReply {
   string nodeId = 1;
   bool ok = 2;
+}
+
+message LogEntry {
+  string key = 1;
+  string value = 2;
+  int32 lsn = 3;
+  bool deleted = 4;
+}
+
+message ReplicateReply {
+  bool ok = 1;
 }
