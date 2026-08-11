@@ -66,6 +66,10 @@ export class Cluster {
         })
         callback(null, { ok: true })
       },
+
+      Forward: (call: any, callback: any) => {
+
+      }
     });
 
     await new Promise<void>((resolve, reject) => {
@@ -133,6 +137,18 @@ export class Cluster {
   get isLeader(): boolean {
     return this.config.nodeId === this.leaderId
   }
+
+  getLeaderPeer(): Peer | undefined {
+    if(this.isLeader) return
+
+    return this.config.peers.find((peer) => peer.id === this.leaderId)
+  }
+
+  forwardToLeader(op) {
+    
+  }
+
+
 
   private startHeartbeats(): void {
     this.timer = setInterval(() => this.tick(), this.config.heartbeatMs);
