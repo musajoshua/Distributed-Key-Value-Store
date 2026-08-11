@@ -5,6 +5,7 @@ package kv;
 service Cluster {
   rpc Heartbeat (HeartbeatRequest) returns (HeartbeatReply);
   rpc Replicate (LogEntry) returns (ReplicateReply);
+  rpc Forward (ForwardRequest) returns (ForwardReply);
 }
 
 message HeartbeatRequest {
@@ -25,4 +26,23 @@ message LogEntry {
 
 message ReplicateReply {
   bool ok = 1;
+}
+
+// A client write forwarded from a follower to the leader (no LSN — the leader mints it).
+message ForwardRequest {
+  string key = 1;
+  string value = 2;
+  bool deleted = 3;
+}
+
+enum ForwardReplyStatus {
+  UNSPECIFIED = 0;
+  OK = 1;
+  NOT_FOUND = 2;
+  NO_MAJORITY_ACK = 3;
+}
+
+message ForwardReply {
+  ForwardReplyStatus status = 1;
+  int32 lsn = 2;
 }
