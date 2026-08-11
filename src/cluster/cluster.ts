@@ -3,7 +3,7 @@ import * as protoLoader from '@grpc/proto-loader';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Config, Peer } from '../config.ts';
-import type { Store } from '../store.ts';
+import type { LogEntry, Store } from '../store.ts';
 
 type Logger = {
   info: (...args: any[]) => void;
@@ -55,6 +55,17 @@ export class Cluster {
       Heartbeat: (_call: any, callback: any) => {
         callback(null, { nodeId: this.config.nodeId, ok: true });
       },
+      
+      Replicate: (call: any, callback: any) => {
+        const entry = call.request;
+        this.store.apply({
+            lsn: entry.lsn,
+            value: entry.deleted ? null : entry.value,
+            deleted: entry.deleted,
+            key: entry.key
+        })
+        callback(null, { ok: true })
+      },
     });
 
     await new Promise<void>((resolve, reject) => {
@@ -66,6 +77,44 @@ export class Cluster {
     });
     this.log.info(`gRPC listening on :${this.config.grpcPort}`);
     this.startHeartbeats();
+  }
+
+  async replicate(entry: LogEntry): Promise<boolean> {
+    const majority = Math.floor((this.config.peers.length + 1) / 2) + 1
+    const followersNeeded = majority - 1
+
+    if(followersNeeded <= 0) return true
+
+    return new Promise<boolean>((resolve) => {
+      // followers that have confirmed so far
+      let acks = 0;              
+      // have we already answered the caller?
+      let settled = false;      
+
+      const finish = (result: boolean) => {
+        // first answer wins; ignore everyone who arrives later
+        if (settled) return;    
+        settled = true;
+        resolve(result);
+      };
+      
+      for (const ps of this.peers) {
+        // each call must answer within 1s
+        const deadline = new Date(Date.now() + 1000);
+
+        ps.client.Replicate(entry, { deadline }, (err: any, reply: any) => {
+          if (!err && reply?.ok){
+            ++acks
+
+            if(acks >= followersNeeded){
+              finish(true)
+            }
+          }
+        });
+      }
+
+      setTimeout(() => finish(false), 1000)
+    })
   }
 
   get leaderId(): string {
