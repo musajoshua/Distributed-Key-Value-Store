@@ -1,0 +1,24 @@
+{
+  "name": "kvstore",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Distributed in-memory key-value store (hackathon: Build It, Break It, Fix It)",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "node --watch src/index.ts",
+    "start": "node src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "1.14.4",
+    "@grpc/proto-loader": "0.8.1",
+    "fastify": "5.11.3"
+  },
+  "devDependencies": {
+    "@types/node": "26.2.0",
+    "typescript": "7.0.2"
+  }
+}

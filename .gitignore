@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.log
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# Local data (write-ahead log, snapshots)
+data/
+
+.DS_Store
