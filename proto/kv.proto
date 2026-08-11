@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package kv;
+
+service Cluster {
+  rpc Heartbeat (HeartbeatRequest) returns (HeartbeatReply);
+}
+
+message HeartbeatRequest {
+  string nodeId = 1;
+}
+
+message HeartbeatReply {
+  string nodeId = 1;
+  bool ok = 2;
+}
