@@ -1,0 +1,15 @@
+node_modules
+data
+.git
+.gitignore
+.cursor
+docs
+terminals
+*.md
+*.log
+.env
+.env.*
+api.http
+Dockerfile
+docker-compose.yml
+.dockerignore

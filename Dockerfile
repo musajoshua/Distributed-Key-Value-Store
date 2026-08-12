@@ -1,9 +1,10 @@
 FROM node:26-alpine
 WORKDIR /app
 
-# Install dependencies first (better layer caching). We run via tsx, so dev deps are needed.
+# Install prod deps only — Node runs the TS sources directly (native type-stripping),
+# so there's no build/tsc step and dev dependencies aren't needed at runtime.
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --omit=dev
 
 # App source
 COPY tsconfig.json ./

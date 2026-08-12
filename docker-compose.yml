@@ -1,0 +1,62 @@
+# Local 3-node cluster — the graded artifact and a fast way to run the whole
+# system. Same image everywhere; nodes are differentiated only by env.
+#
+#   docker compose up --build      # start the 3-node cluster
+#   curl localhost:8081/health     # node1  (8082 -> node2, 8083 -> node3)
+#   docker compose stop node1      # chaos: drop the leader, watch failover
+#                                  # (stop, not kill: restart:unless-stopped would auto-revive a kill)
+#   docker compose start node1     # bring it back -> WAL + resync recovery
+#   docker compose down -v         # stop and wipe the data volumes
+
+# --- shared bits (DRY: one place to change ports/timers) ---
+x-node-env: &node-env
+  HTTP_PORT: "8080"          # internal port inside every container
+  GRPC_PORT: "9080"          # internal peer port inside every container
+  HEARTBEAT_MS: "250"
+  ELECTION_TIMEOUT_MIN_MS: "1000"
+  ELECTION_TIMEOUT_MAX_MS: "2000"
+
+x-node: &node
+  build: .
+  image: kvstore:latest       # built once, reused by all three services
+  restart: unless-stopped     # a killed node comes back on its own -> shows recovery
+
+services:
+  node1:
+    <<: *node
+    environment:
+      <<: *node-env
+      NODE_ID: node1
+      # peers addressed by compose service name (built-in DNS) on the internal gRPC port
+      PEERS: node2@node2:9080,node3@node3:9080
+    ports:
+      - "8081:8080"           # only HTTP is published to the host, for curl / api.http
+    volumes:
+      - node1-data:/app/data  # persist this node's WAL across container restarts
+
+  node2:
+    <<: *node
+    environment:
+      <<: *node-env
+      NODE_ID: node2
+      PEERS: node1@node1:9080,node3@node3:9080
+    ports:
+      - "8082:8080"
+    volumes:
+      - node2-data:/app/data
+
+  node3:
+    <<: *node
+    environment:
+      <<: *node-env
+      NODE_ID: node3
+      PEERS: node1@node1:9080,node2@node2:9080
+    ports:
+      - "8083:8080"
+    volumes:
+      - node3-data:/app/data
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:
