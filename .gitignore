@@ -13,4 +13,7 @@ credentials.json
 # Local data (write-ahead log, snapshots)
 data/
 
+# Local test artifacts (manual API checks)
+kvtest*.json
+
 .DS_Store
