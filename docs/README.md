@@ -11,7 +11,8 @@ Reference material for this distributed key-value store — the **why** behind t
   - `store-lsn-and-convergence.md` — the in-memory store, LSNs, tombstones, and `apply` convergence.
   - `async-and-concurrency.md` — Node's event loop, `await` yield points, and the LSN-collision race.
   - `replication-and-quorum.md` — N/W/R, majority math, and the replicate-then-apply write path.
-  - `leader-election.md` — static leader today; Raft-lite (terms, votes, heartbeats) planned for Stage 3.
+  - `leader-election.md` — Raft-lite election (terms, votes, heartbeats), the two bugs we caught in review, and the chaos results.
+  - `persistence-and-wal.md` — the write-ahead log: append-in-`apply`, boot replay, and why restart-recovery isn't the same as resync.
   - `duplication-and-dry.md` — the duplication-drift → DRY lesson (a real mistake, captured), from extracting the shared `write()`.
 
 ## How to use these

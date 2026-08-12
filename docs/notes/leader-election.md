@@ -1,10 +1,9 @@
 # Leader election
 
 ## Where we are
-- **Stage 2 (now): static leader** = the smallest node id, computed independently by every node from the shared membership set (`id@host:port`). All nodes reach the same answer with **zero coordination** — but only because they share an identical membership list. The moment liveness changes, a static rule isn't enough.
-- **Stage 3 (planned): Raft-lite election** to pick a leader dynamically and fail over safely.
+- **Built: Raft-lite election** — the leader is chosen dynamically and fails over safely; validated under chaos. It superseded the earlier static "smallest node id" rule, which had zero coordination cost but **no failover**.
 
-## Raft-lite building blocks (planned)
+## Raft-lite building blocks
 - **Roles:** every node is `Follower`, `Candidate`, or `Leader`.
 - **Term (epoch):** a monotonically increasing integer; each election is a new term. Any message carries a term; **seeing a higher term → step down to Follower**. At most one leader per term (majority vote + one vote per node per term).
 - **Heartbeats:** the leader pings every follower each `HEARTBEAT_MS` (~250); each heartbeat resets the follower's election timer.
@@ -22,9 +21,20 @@
 ## The tie to W=2 durability (the up-to-date-log rule)
 An acked write is on leader + 1 follower. The vote restriction means a node **missing** that write (smaller `lastLSN`) can't win, so the new leader always has every majority-acked write. **Election safety and write durability are the same mechanism from two angles.**
 
+## Bugs we caught reviewing our own election (both fixed)
+1. **Stale-term crowning (safety).** The win guard checked `role == 'candidate'` but not the term, so a candidate that had already moved to term N+1 could be crowned by a *late* "yes" from term N. Fix: snapshot `const electionTerm = currentTerm` per election and require `currentTerm === electionTerm` before `becomeLeader()`. Why it matters: "majority ⇒ one leader" only holds if every counted vote is from the **same** term.
+2. **RequestVote had no deadline (hygiene).** Every other outbound RPC bounds its wait; this one didn't, so a *hung* peer left a dangling call. Not a safety/liveness bug (the election timer re-fires), just a leak + inconsistency. Fix: `{ deadline: electionTimeoutMinMs }` — a vote is worthless past the next election anyway.
+
+## Validated (chaos)
+- Kill leader → a follower wins a new term → writes resume; the committed key is still readable (up-to-date-log rule).
+- Kill a majority (2/3) → the lone survivor stays a **candidate** forever, never leader, writes → 503. No split-brain.
+- Revive a node → majority returns → the stuck candidate wins → writes resume.
+- `/health` now reports `candidate` honestly (previously masked as `follower`).
+
 ## Recall prompts
 1. How is the static leader chosen, and why do all nodes agree without talking?
 2. What is a *term*, and how does it kill split-brain?
 3. State the vote-granting conditions — especially the log freshness rule.
 4. Why can a minority-partition node never become leader?
 5. How does the up-to-date-log rule protect a W=2 acknowledged write during failover?
+6. Why is `role == 'candidate'` not enough to safely crown a winner — what else must the guard check, and what breaks without it?
