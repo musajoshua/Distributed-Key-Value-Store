@@ -24,6 +24,19 @@ interface IWriteResult {
   lsn?: number
 }
 
+export type Role = 'follower' | 'candidate' | 'leader';
+
+export interface IRequestVoteRequest {
+  term: number;
+  candidateId: string;
+  lastLsn: number;
+}
+
+export interface IRequestVoteReply {
+  term: number;
+  voteGranted: boolean;
+}
+
 const PROTO_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../proto/kv.proto');
 
 const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
@@ -49,6 +62,11 @@ export class Cluster {
   private server: grpc.Server;
   private peers: PeerState[];
   private timer?: ReturnType<typeof setInterval>;
+  private electionTimer?: ReturnType<typeof setTimeout>;
+  private currentTerm: number;
+  private role: Role;
+  private votedFor: string | null;
+  private leaderId: string | null = null;
 
   constructor(config: Config, store: Store, log: Logger) {
     this.config = config;
@@ -61,12 +79,28 @@ export class Cluster {
       lastSeen: 0,
       alive: false,
     }));
+    this.currentTerm = 0;
+    this.role = 'follower';
+    this.votedFor = null;
   }
 
   async listen(): Promise<void> {
     this.server.addService(ClusterService.service, {
-      Heartbeat: (_call: any, callback: any) => {
-        callback(null, { nodeId: this.config.nodeId, ok: true });
+      Heartbeat: (call: any, callback: any) => {
+        const request = call.request;
+
+        if(request.term < this.currentTerm){
+          callback(null, { term: this.currentTerm, ok: false });
+          return
+        }
+
+        this.currentTerm = request.term;
+        this.role = 'follower';
+        this.votedFor = null;
+        this.leaderId = request.nodeId;
+        this.resetElectionTimer();
+
+        callback(null, {term: this.currentTerm, ok: true });
       },
       
       Replicate: (call: any, callback: any) => {
@@ -87,6 +121,11 @@ export class Cluster {
 
         callback(null, { status, lsn })
       },
+
+      RequestVote: async (call: any, callback: any) => {
+
+        callback(null, this.requestVote(call.request))
+      },
     });
 
     await new Promise<void>((resolve, reject) => {
@@ -98,6 +137,7 @@ export class Cluster {
     });
     this.log.info(`gRPC listening on :${this.config.grpcPort}`);
     this.startHeartbeats();
+    this.resetElectionTimer();
   }
 
   async write(op: IWriteOp): Promise<IWriteResult> {
@@ -119,6 +159,40 @@ export class Cluster {
     this.store.apply(entry)
 
     return { status: 'OK', lsn}
+  }
+
+  requestVote(req: IRequestVoteRequest): IRequestVoteReply {
+    if(req.term < this.currentTerm){
+      return {
+        voteGranted: false,
+        term: this.currentTerm
+      }
+    }
+
+    if(req.term > this.currentTerm){
+      this.currentTerm = req.term;
+      this.role = 'follower';
+      this.votedFor = null;
+    }
+      
+    const canVote = this.votedFor === null || this.votedFor === req.candidateId;
+    const isLsnUpToDate = req.lastLsn >= this.store.highestLsn;
+
+    if(canVote && isLsnUpToDate){
+      this.votedFor = req.candidateId;
+
+      return {
+        term: this.currentTerm,
+        voteGranted: true
+      }
+    }
+    
+
+    return {
+      voteGranted: false,
+      term: this.currentTerm
+    }
+
   }
 
   async replicate(entry: LogEntry): Promise<boolean> {
@@ -159,21 +233,14 @@ export class Cluster {
     })
   }
 
-  get leaderId(): string {
-    const fullList = [this.config.nodeId, ...this.config.peers.map(p => p.id)]
-
-    const min = fullList.reduce((prev, curr) => {
-      if(!prev || prev > curr){
-        return curr
-      }
-      return prev
-    }, '')
-
-    return min;
+  get isLeader(): boolean {
+    return this.role === 'leader';
   }
 
-  get isLeader(): boolean {
-    return this.config.nodeId === this.leaderId
+  // Read-only view of the role for observability (e.g. /health).
+  // Only the election logic inside Cluster may mutate `role`.
+  get roleName(): Role {
+    return this.role;
   }
 
   getLeaderPeer(): Peer | undefined {
@@ -209,12 +276,22 @@ export class Cluster {
 
   // One heartbeat round: ping every peer, then re-evaluate who looks dead.
   private tick(): void {
-    const req = { nodeId: this.config.nodeId };
+    if(this.role != 'leader') return;
+
+    const req = { nodeId: this.config.nodeId, term: this.currentTerm };
     for (const ps of this.peers) {
       // Bound each call so a slow/dead peer can't stall us.
       const deadline = new Date(Date.now() + this.config.heartbeatMs * 2);
-      ps.client.Heartbeat(req, { deadline }, (err: any) => {
+      ps.client.Heartbeat(req, { deadline }, (err: any, reply: any) => {
         if (!err) this.markAlive(ps);
+
+        if(!err && reply.term > this.currentTerm){
+          this.role = 'follower';
+          this.currentTerm = reply.term;
+          this.votedFor = null;
+          this.leaderId = null;
+          this.resetElectionTimer();
+        }
       });
     }
     this.checkLiveness();
@@ -239,6 +316,63 @@ export class Cluster {
         this.log.warn(`peer ${ps.peer.id} is DOWN`);
       }
     }
+  }
+
+  private resetElectionTimer() {
+    if(this.electionTimer) clearTimeout(this.electionTimer)
+
+    const min = this.config.electionTimeoutMinMs
+    const max = this.config.electionTimeoutMaxMs
+    
+    const t = (min + Math.random() * (max - min));
+    
+    this.electionTimer = setTimeout(() => this.startElection(), t)
+  }
+
+  private startElection() {
+    this.role = 'candidate';
+    this.currentTerm++;
+    this.votedFor = this.config.nodeId;
+    this.leaderId = null;
+
+    // The term this election belongs to. Captured per-call, so a late vote reply
+    // can only crown us if we are STILL campaigning for this same term.
+    const electionTerm = this.currentTerm;
+
+    this.resetElectionTimer();
+
+    let votes = 1;
+
+    const majority = Math.floor((this.config.peers.length + 1) / 2) + 1;
+
+    for (const ps of this.peers) {
+      // A vote is worthless once this election would be superseded by the next
+      // timeout, so bound the wait to the shortest election timeout.
+      const deadline = new Date(Date.now() + this.config.electionTimeoutMinMs);
+
+      ps.client.RequestVote({ term: electionTerm, candidateId: this.config.nodeId, lastLsn: this.store.highestLsn}, { deadline }, (err: any, reply: any) => {
+        if(!err && reply.term > this.currentTerm){
+          this.role = 'follower';
+          this.currentTerm = reply.term;
+          this.votedFor = null
+        }else{
+          if (!err && reply?.voteGranted){
+            ++votes
+
+            if(votes >= majority && this.role == 'candidate' && this.currentTerm === electionTerm){
+              this.becomeLeader()
+            }
+          }
+        }
+      });
+    }
+  }
+
+  becomeLeader(){
+    this.role = 'leader';
+    this.leaderId = this.config.nodeId;
+
+    clearTimeout(this.electionTimer)
   }
 
   peerStatus(): Array<{ id: string; alive: boolean }> {

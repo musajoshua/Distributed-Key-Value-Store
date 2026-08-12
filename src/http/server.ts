@@ -65,7 +65,7 @@ export function createServer(store: Store, config: Config, cluster: Cluster): Fa
       status: 'healthy',
       nodeId: config.nodeId,
       nodes: config.peers.length + 1,
-      role: cluster.isLeader ? 'leader' : 'follower',
+      role: cluster.roleName,
     });
   });
 
