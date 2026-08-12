@@ -12,6 +12,7 @@ Reference material for this distributed key-value store — the **why** behind t
   - `async-and-concurrency.md` — Node's event loop, `await` yield points, and the LSN-collision race.
   - `replication-and-quorum.md` — N/W/R, majority math, and the replicate-then-apply write path.
   - `leader-election.md` — static leader today; Raft-lite (terms, votes, heartbeats) planned for Stage 3.
+  - `duplication-and-dry.md` — the duplication-drift → DRY lesson (a real mistake, captured), from extracting the shared `write()`.
 
 ## How to use these
 

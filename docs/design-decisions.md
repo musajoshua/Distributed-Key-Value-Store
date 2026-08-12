@@ -17,7 +17,7 @@ Status legend: **DECIDED** (built or being built) · **PLANNED** (later stage) �
 - Rationale: the grader hits us with `curl`; no reason to make graders speak gRPC.
 
 ## 3. Inter-node transport: gRPC — DECIDED
-- Node-to-node RPCs (`Heartbeat`, `Replicate`, later `RequestVote`) over gRPC.
+- Node-to-node RPCs (`Heartbeat`, `Replicate`, `Forward`, later `RequestVote`) over gRPC.
 - Rationale: typed contract as the protocol grows, compact binary for constant chatter, first-class per-call **deadlines** (critical for Chaos Hour).
 - Trade-off: setup friction (`.proto` + loader).
 
@@ -36,9 +36,10 @@ Status legend: **DECIDED** (built or being built) · **PLANNED** (later stage) �
 - `W + R = 3`, not `> N = 3` → eventual by design. Bump `R` to 2 for strong reads.
 - CAP stance: during a partition, a leader that can't reach a majority **refuses** the write (CP on writes) rather than falsely acking.
 
-## 7. Write-path order: replicate-then-apply — DECIDED
-- Leader: mint LSN → replicate to majority → **only then** apply locally + ack the client.
-- Rationale: the leader never holds/acks a write that isn't majority-durable.
+## 7. Write path: routing, order, and the shared procedure — DECIDED
+- **Routing:** a write may land on any node. A **follower forwards** it to the leader via the `Forward` gRPC RPC; the leader runs the write and returns a `WriteStatus` (`OK` / `NOT_FOUND` / `NO_MAJORITY_ACK`), which the follower maps back to HTTP (200 / 404 / 504).
+- **One shared procedure:** the leader's write logic lives in a single `cluster.write(op)` — the authority owns it — called by *both* the leader's HTTP path and the `Forward` handler, so there is no duplication (see `notes/duplication-and-dry.md` for how a duplicated copy drifted before this).
+- **Order (replicate-then-apply):** mint LSN → replicate to majority → **only then** apply locally + ack the client. The leader never holds/acks a write that isn't majority-durable.
 - LIMITATION: followers apply **eagerly** on receipt (no separate commit-index round like full Raft), so a follower can briefly hold a not-yet-committed write. Leader is commit-safe; followers are eager.
 
 ## 8. Data model: in-memory versioned map — DECIDED
