@@ -67,6 +67,7 @@ export class Cluster {
   private role: Role;
   private votedFor: string | null;
   private leaderId: string | null = null;
+  private resyncing = false;
 
   constructor(config: Config, store: Store, log: Logger) {
     this.config = config;
@@ -101,6 +102,10 @@ export class Cluster {
         this.resetElectionTimer();
 
         callback(null, {term: this.currentTerm, ok: true });
+
+        // The leader stamps its highest LSN on every heartbeat; if it's ahead of
+        // us we missed writes (were down / are new) → pull a resync to catch up.
+        if (request.highestLsn > this.store.highestLsn) this.resyncFromLeader();
       },
       
       Replicate: (call: any, callback: any) => {
@@ -125,6 +130,10 @@ export class Cluster {
       RequestVote: async (call: any, callback: any) => {
 
         callback(null, this.requestVote(call.request))
+      },
+
+      Resync: (call: any, callback: any) => {
+        callback(null, { entries: this.store.entriesSince(call.request.fromLsn) })
       },
     });
 
@@ -268,6 +277,29 @@ export class Cluster {
     })
   }
 
+  // Pull the leader's current state and merge it in via apply(). Triggered when a
+  // heartbeat shows the leader's LSN ahead of ours — i.e. we were down or are new.
+  private resyncFromLeader(): void {
+    if (this.role !== 'follower' || this.resyncing || !this.leaderId) return;
+
+    const leader = this.peers.find((p) => p.peer.id === this.leaderId);
+    if (!leader) return;
+
+    this.resyncing = true;
+    const deadline = new Date(Date.now() + 2000);
+    leader.client.Resync({ fromLsn: 0 }, { deadline }, (err: any, reply: any) => {
+      this.resyncing = false;
+      if (err || !reply?.entries) return;
+
+      for (const e of reply.entries) {
+        this.store.apply({ key: e.key, value: e.deleted ? null : e.value, deleted: e.deleted, lsn: e.lsn });
+      }
+      if (reply.entries.length > 0) {
+        this.log.info(`resynced ${reply.entries.length} entries from ${this.leaderId}`);
+      }
+    });
+  }
+
 
 
   private startHeartbeats(): void {
@@ -278,7 +310,7 @@ export class Cluster {
   private tick(): void {
     if(this.role != 'leader') return;
 
-    const req = { nodeId: this.config.nodeId, term: this.currentTerm };
+    const req = { nodeId: this.config.nodeId, term: this.currentTerm, highestLsn: this.store.highestLsn };
     for (const ps of this.peers) {
       // Bound each call so a slow/dead peer can't stall us.
       const deadline = new Date(Date.now() + this.config.heartbeatMs * 2);
