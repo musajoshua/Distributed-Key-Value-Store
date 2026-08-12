@@ -38,10 +38,6 @@ export function createServer(store: Store, config: Config, cluster: Cluster): Fa
     },
   );
 
-  // async write(op: { key: string; value: string; deleted: boolean }): Promise<{status: string; lsn?: number}> {
-
-  // }
-
   app.get<{ Params: IParams }>('/store/:key', async (req, reply) => {
     const value = store.get(req.params.key);
     if (value === null) {
