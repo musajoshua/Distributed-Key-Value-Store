@@ -7,11 +7,13 @@ service Cluster {
   rpc Replicate (LogEntry) returns (ReplicateReply);
   rpc Forward (ForwardRequest) returns (ForwardReply);
   rpc RequestVote (RequestVoteRequest) returns (RequestVoteReply);
+  rpc Resync (ResyncRequest) returns (ResyncReply);
 }
 
 message HeartbeatRequest {
   string nodeId = 1;
   int32 term = 2;
+  int32 highestLsn = 3;
 }
 
 message HeartbeatReply {
@@ -59,4 +61,15 @@ message RequestVoteRequest {
 message RequestVoteReply {
   int32 term = 1;
   bool voteGranted = 2;
+}
+
+// Anti-entropy: a lagging or restarted node asks the leader for every log
+// entry after its highest applied LSN (fromLsn=0 on a fresh restart => the
+// leader returns full current state, so delta and snapshot are one path).
+message ResyncRequest {
+  int32 fromLsn = 1;
+}
+
+message ResyncReply {
+  repeated LogEntry entries = 1;
 }
