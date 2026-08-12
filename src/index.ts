@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { loadConfig } from './config.ts';
 import { Store } from './store.ts';
 import { createServer } from './http/server.ts';
@@ -5,7 +6,8 @@ import { Cluster } from './cluster/cluster.ts';
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const store = new Store();
+  const store = new Store(path.join('data', `${config.nodeId}.wal`));
+  store.load();
   const cluster = new Cluster(config, store, console);
   const app = createServer(store, config, cluster);
 
