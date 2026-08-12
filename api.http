@@ -1,0 +1,51 @@
+###############################################
+# KV store — HTTP API
+#
+# Use with the "REST Client" extension (humao.rest-client):
+#   1. Install it from the Extensions panel.
+#   2. Click the "Send Request" link that appears above each request below.
+#
+# Local 3-node cluster (docker-free): ports 8081 / 8082 / 8083.
+# Any node accepts writes: a follower transparently forwards to the leader.
+# Any node serves reads locally (R=1, eventually consistent).
+###############################################
+
+@node1 = http://localhost:8081
+@node2 = http://localhost:8082
+@node3 = http://localhost:8083
+
+### Health — node1 (role: leader | candidate | follower)
+GET {{node1}}/health
+
+### Health — node2
+GET {{node2}}/health
+
+### Health — node3
+GET {{node3}}/health
+
+### PUT k1 via node1 (if node1 is a follower it forwards to the leader)
+PUT {{node1}}/store/k1
+Content-Type: application/json
+
+{ "value": "hello" }
+
+### GET k1 from node2 (reads are local — may briefly lag the leader)
+GET {{node2}}/store/k1
+
+### GET k1 from node3
+GET {{node3}}/store/k1
+
+### PUT k1 via node2 (exercise forwarding from a different node)
+PUT {{node2}}/store/k1
+Content-Type: application/json
+
+{ "value": "world" }
+
+### DELETE k1 via node1
+DELETE {{node1}}/store/k1
+
+### GET k1 after delete (expect 404 — tombstoned)
+GET {{node1}}/store/k1
+
+### GET a key that never existed (expect 404)
+GET {{node1}}/store/does-not-exist
