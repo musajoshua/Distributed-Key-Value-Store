@@ -1,7 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Store } from '../store.ts';
 import type { Config } from '../config.ts';
-import type { Cluster } from '../cluster/cluster.ts';
+import type { Cluster, WriteStatus } from '../cluster/cluster.ts';
 
 interface IParams {
   key: string
@@ -9,6 +9,13 @@ interface IParams {
 
 interface IBody {
   value: string
+}
+
+const mapStatusToCode = (status: WriteStatus): number => {
+  if(status === 'NOT_FOUND') return 404
+  if(status === 'NO_MAJORITY_ACK') return 504
+  if(status === 'NO_LEADER') return 503
+  return 200
 }
 
 export function createServer(store: Store, config: Config, cluster: Cluster): FastifyInstance {
@@ -23,21 +30,17 @@ export function createServer(store: Store, config: Config, cluster: Cluster): Fa
         return reply.code(400).send({ error: 'body must be { "value": <string> }' });
       }
 
-      if(!cluster.isLeader){
-        return reply.code(503).send({ error: 'not the leader' });
-      }
+      const op = {key, value, deleted: false}
 
-      const lsn = store.nextLsn();
-      const entry = { key, value, lsn, deleted: false };
+      const {status, lsn} = cluster.isLeader ? await cluster.write(op) : await cluster.forwardToLeader(op);
 
-      const ok = await cluster.replicate(entry)
-
-      if(!ok) return reply.code(504).send({ error: 'could not reach a majority' });
-      
-      store.apply(entry)
-      return reply.code(200).send({ ok: true, lsn });
+      return reply.code(mapStatusToCode(status)).send({ lsn })
     },
   );
+
+  // async write(op: { key: string; value: string; deleted: boolean }): Promise<{status: string; lsn?: number}> {
+
+  // }
 
   app.get<{ Params: IParams }>('/store/:key', async (req, reply) => {
     const value = store.get(req.params.key);
@@ -48,26 +51,13 @@ export function createServer(store: Store, config: Config, cluster: Cluster): Fa
   });
 
   app.delete<{ Params: IParams }>('/store/:key', async (req, reply) => {
-    if(!cluster.isLeader){
-      return reply.code(503).send({ error: 'not the leader' });
-    }
+    const { key } = req.params;
 
-    const storedEntry = store.get(req.params.key);
-    if (storedEntry === null) {
-      return reply.code(404).send({ error: 'not found' });
-    }
+    const op = {key, value: '', deleted: true}
 
-    const lsn = store.nextLsn();
+    const {status, lsn} = cluster.isLeader ? await cluster.write(op) : await cluster.forwardToLeader(op);
 
-    const entry = { key: req.params.key, value: '', lsn, deleted: true };
-
-    const ok = await cluster.replicate(entry);
-
-    if(!ok) return reply.code(504).send({ error: 'could not reach a majority' });
-
-    store.apply(entry)
-
-    return reply.code(200).send({ ok: true });
+      return reply.code(mapStatusToCode(status)).send({ lsn })
   });
 
   app.get('/health', async (_req, reply) => {

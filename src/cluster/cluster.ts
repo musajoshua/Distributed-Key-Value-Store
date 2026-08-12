@@ -11,6 +11,19 @@ type Logger = {
   error: (...args: any[]) => void;
 };
 
+interface IWriteOp {
+  key: string;
+  value: string;
+  deleted: boolean
+}
+
+export type WriteStatus = 'OK' | 'NOT_FOUND' | 'NO_MAJORITY_ACK' | 'NO_LEADER';
+
+interface IWriteResult {
+  status: WriteStatus,
+  lsn?: number
+}
+
 const PROTO_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../proto/kv.proto');
 
 const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
@@ -67,9 +80,13 @@ export class Cluster {
         callback(null, { ok: true })
       },
 
-      Forward: (call: any, callback: any) => {
+      Forward: async (call: any, callback: any) => {
+        const op: IWriteOp = call.request;
 
-      }
+        const { status, lsn } = await this.write(op);
+
+        callback(null, { status, lsn })
+      },
     });
 
     await new Promise<void>((resolve, reject) => {
@@ -81,6 +98,27 @@ export class Cluster {
     });
     this.log.info(`gRPC listening on :${this.config.grpcPort}`);
     this.startHeartbeats();
+  }
+
+  async write(op: IWriteOp): Promise<IWriteResult> {
+    if(!this.isLeader) return { status: 'NO_LEADER'}
+
+    const storedEntry = this.store.get(op.key);
+    if (storedEntry === null && op.deleted) {
+      return { status: 'NOT_FOUND' }
+    }
+
+    const lsn = this.store.nextLsn();
+
+    const entry = { key: op.key, value: op.value, lsn, deleted: op.deleted };
+
+    const ok = await this.replicate(entry);
+
+    if(!ok) return { status: 'NO_MAJORITY_ACK'}
+
+    this.store.apply(entry)
+
+    return { status: 'OK', lsn}
   }
 
   async replicate(entry: LogEntry): Promise<boolean> {
@@ -144,8 +182,23 @@ export class Cluster {
     return this.config.peers.find((peer) => peer.id === this.leaderId)
   }
 
-  forwardToLeader(op) {
-    
+  forwardToLeader(op: IWriteOp): Promise<IWriteResult> {
+    return new Promise((resolve) => {
+
+      const leaderPeer = this.getLeaderPeer()
+
+      if(!leaderPeer) return resolve({ status: 'NO_LEADER'})
+
+      const leader = this.peers.find((client) => client.peer.id === leaderPeer.id);
+
+      if(!leader) return resolve({ status: 'NO_LEADER'})
+
+      leader.client.Forward(op, (err: any, reply: IWriteResult) => {
+        if(err) return resolve({ status: 'NO_LEADER' })
+
+        resolve(reply)
+      })
+    })
   }
 
 
