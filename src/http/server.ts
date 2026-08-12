@@ -18,6 +18,22 @@ const mapStatusToCode = (status: WriteStatus): number => {
   return 200
 }
 
+const errorFor = (status: WriteStatus): string => {
+  if(status === 'NOT_FOUND') return 'not found'
+  if(status === 'NO_MAJORITY_ACK') return 'could not reach a majority'
+  if(status === 'NO_LEADER') return 'no leader available; retry'
+  return 'error'
+}
+
+// One place both PUT and DELETE shape their response: lsn on success, a
+// consistent { error } on any failure — so the two handlers can't drift.
+const writeResponse = (result: { status: WriteStatus; lsn?: number }): { code: number; body: Record<string, unknown> } => {
+  const code = mapStatusToCode(result.status)
+  return result.status === 'OK'
+    ? { code, body: { lsn: result.lsn } }
+    : { code, body: { error: errorFor(result.status) } }
+}
+
 export function createServer(store: Store, config: Config, cluster: Cluster): FastifyInstance {
   const app = Fastify({ logger: true });
 
@@ -32,9 +48,10 @@ export function createServer(store: Store, config: Config, cluster: Cluster): Fa
 
       const op = {key, value, deleted: false}
 
-      const {status, lsn} = cluster.isLeader ? await cluster.write(op) : await cluster.forwardToLeader(op);
+      const result = cluster.isLeader ? await cluster.write(op) : await cluster.forwardToLeader(op);
 
-      return reply.code(mapStatusToCode(status)).send({ lsn })
+      const { code, body } = writeResponse(result)
+      return reply.code(code).send(body)
     },
   );
 
@@ -51,9 +68,10 @@ export function createServer(store: Store, config: Config, cluster: Cluster): Fa
 
     const op = {key, value: '', deleted: true}
 
-    const {status, lsn} = cluster.isLeader ? await cluster.write(op) : await cluster.forwardToLeader(op);
+    const result = cluster.isLeader ? await cluster.write(op) : await cluster.forwardToLeader(op);
 
-      return reply.code(mapStatusToCode(status)).send({ lsn })
+    const { code, body } = writeResponse(result)
+    return reply.code(code).send(body)
   });
 
   app.get('/health', async (_req, reply) => {
