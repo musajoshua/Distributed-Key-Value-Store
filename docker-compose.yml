@@ -56,6 +56,18 @@ services:
     volumes:
       - node3-data:/app/data
 
+  # MANDATORY for evaluation — the organizer's chaos agent. It controls our
+  # containers via the Docker socket (kill / pause / partition) and exposes its
+  # API on :9090 (organizer only). The image is provided by the organizer; to
+  # run just the nodes locally, use:  docker compose up node1 node2 node3
+  chaos-agent:
+    image: ghcr.io/arihant/chaos-agent:latest
+    container_name: chaos-agent
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "9090:9090"
+
 volumes:
   node1-data:
   node2-data:
